@@ -1,6 +1,6 @@
 # 高速公路应急车道更换备胎
 
-Interactive Three.js scene of a spare-tire change on a highway emergency shoulder: cinematic golden-hour lighting, a vendored PBR car, and a step-by-step Chinese walkthrough.
+Guided Three.js walkthrough of a spare-tire change on a highway emergency shoulder: golden-hour lighting, a vendored PBR car, and a Chinese slideshow. The camera moves itself — a first-time viewer only presses **下一步**.
 
 License plate text (front and rear): **www.3Dfans.site**
 
@@ -14,9 +14,16 @@ python3 -m http.server
 
 Then open [http://127.0.0.1:8000/](http://127.0.0.1:8000/).
 
-Drag to orbit and scroll to zoom. Use **上一步 / 下一步**, or the left and right arrow keys (or Space), to move through the procedure. Add `?step=4&snap=1` to jump to a step.
+## How to watch
 
-`shots/` holds reference screenshots of the scene.
+The page is a guided slideshow, not a free-orbit sandbox.
+
+- **下一步 / 上一步** (or ← → and Space) plays that step’s short demo: hazards, chock, tools, lug nuts, jack, and wheel.
+- The camera eases (about 1.3s) onto the thing you are doing — usually the curb-side rear wheel, the jack pad, or the tools — and stays there. Loading opens on step 1 already framed, not on a distant highway shot.
+- The numbered bar jumps to a step and replays it. It is secondary to the big Next button.
+- **自由看一眼** turns on drag-orbit and scroll-zoom. The next step change turns it off and returns to the guided camera.
+
+`?step=4&snap=1` jumps to a step’s finished pose (steps are 0–9). `shots/` holds reference screenshots.
 
 ## Attribution
 
