@@ -252,8 +252,8 @@ const M = {
   wrench: new THREE.MeshStandardMaterial({ color:0xd5dae0, roughness:0.28, metalness:0.88 }),
   chock: new THREE.MeshStandardMaterial({ color:0x3a342c, roughness:0.8 }),
   spareRubber: new THREE.MeshStandardMaterial({ color:0x141414, roughness:0.9, metalness:0.05 }),
-  spareRim: new THREE.MeshStandardMaterial({ color:0xa8adb4, roughness:0.38, metalness:0.84 }),
-  nut: new THREE.MeshStandardMaterial({ color:0xc5ccd4, roughness:0.32, metalness:0.82 }),
+  spareRim: new THREE.MeshStandardMaterial({ color:0xc5ccd4, roughness:0.32, metalness:0.86 }),
+  nut: new THREE.MeshStandardMaterial({ color:0xd5dbe3, roughness:0.3, metalness:0.84 }),
   stud: new THREE.MeshStandardMaterial({ color:0xb0b6be, roughness:0.3, metalness:0.88 }),
   pinch: new THREE.MeshStandardMaterial({ color:0xd5dbe3, roughness:0.32, metalness:0.7 }),
   plate: new THREE.MeshStandardMaterial({ map:plateMap, roughness:0.35, metalness:0.08 }),
@@ -320,7 +320,11 @@ const saved = {
   trunkLocal: new THREE.Vector3(1.95, 0.55, 0.15),
   radius: 0.38,
   axleSign: 1,
+  axleWorld: new THREE.Vector3(0, 0, 1),
+  axleOut: new THREE.Vector3(0, 0, 1),
   nutFace: 0.14,
+  tireWidth: 0.28,
+  tireCenter: 0,
   wheelRestPos: new THREE.Vector3(),
   wheelRestQuat: new THREE.Quaternion(),
 };
@@ -381,29 +385,49 @@ for (let i=0;i<5;i++){
 hubStay.visible = false;
 
 function makeSpare(radius){
+  // A solid rubber cylinder hides its own rim: from the curb the face is a
+  // featureless black disc and the wheel well reads as empty. Build an open
+  // tread, sidewall rings, and a rim proud of the outboard face instead.
   const g = new THREE.Group();
-  const width = Math.min(0.16, radius * 0.46);
-  const tire = cyl(radius, radius, width, M.spareRubber, 0, 0, 0, g, 40);
-  tire.rotation.x = Math.PI/2;
-  const rim = cyl(radius*0.62, radius*0.62, width*0.55, M.spareRim, 0, 0, 0, g, 28);
+  const width = saved.tireWidth || Math.min(0.28, Math.max(0.22, radius * 0.72));
+  const rimR = Math.min(radius * 0.72, radius - 0.07);
+  const sideInner = rimR + 0.012;
+  const sideOuter = radius * 0.985;
+  const tread = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, width, 40, 1, true), M.spareRubber);
+  tread.rotation.x = Math.PI/2;
+  tread.castShadow = tread.receiveShadow = true;
+  g.add(tread);
+  const half = width * 0.5;
+  for (const z of [half - 0.003, -half + 0.003]) {
+    const side = new THREE.Mesh(new THREE.RingGeometry(sideInner, sideOuter, 48), M.spareRubber);
+    side.position.z = z;
+    side.castShadow = side.receiveShadow = true;
+    g.add(side);
+  }
+  const rimThick = Math.min(0.042, width * 0.2);
+  const faceZ = half - 0.01;
+  const rim = cyl(rimR, rimR * 0.98, rimThick, M.spareRim, 0, 0, faceZ - rimThick * 0.5, g, 32);
   rim.rotation.x = Math.PI/2;
-  cyl(0.045, 0.045, width*0.7, M.spareRim, 0, 0, 0, g, 16).rotation.x = Math.PI/2;
+  const cap = cyl(rimR * 0.2, rimR * 0.2, rimThick * 1.2, M.spareRim, 0, 0, faceZ - rimThick * 0.25, g, 18);
+  cap.rotation.x = Math.PI/2;
   for (let i=0;i<5;i++){
-    const a = (i/5)*Math.PI*2;
-    const sp = box(0.035, radius*0.48, 0.02, M.spareRim, Math.cos(a)*radius*0.28, Math.sin(a)*radius*0.28, 0, g);
+    const a = -Math.PI/2 + (i/5)*Math.PI*2;
+    const sp = box(rimR * 0.72, 0.036, 0.016, M.spareRim, Math.cos(a)*rimR*0.4, Math.sin(a)*rimR*0.4, faceZ - 0.004, g);
     sp.rotation.z = -a;
   }
+  const nutR = rimR * 0.58;
   const nuts = [];
   for (let i=0;i<5;i++){
     const a = -Math.PI/2 + i*Math.PI*2/5;
-    const n = cyl(0.028, 0.03, 0.028, M.nut.clone(), Math.cos(a)*0.12, Math.sin(a)*0.12, width*0.5+0.012, g, 8);
+    const n = cyl(0.026, 0.03, 0.02, M.nut.clone(), Math.cos(a)*nutR, Math.sin(a)*nutR, faceZ + 0.011, g, 6);
     n.rotation.x = Math.PI/2;
-    n.userData.homeZ = width*0.5+0.012;
     n.userData.a = a;
     nuts.push(n);
   }
   g.userData.nuts = nuts;
   g.userData.width = width;
+  g.userData.faceZ = faceZ;
+  g.userData.nutR = nutR;
   return g;
 }
 let spare = makeSpare(0.36);
@@ -459,6 +483,9 @@ focusRing.renderOrder = 4;
 scene.add(focusRing);
 
 const qFlat = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI/2, 0.2, 0));
+const _axleZ = new THREE.Vector3(0, 0, 1);
+const _spareQuat = new THREE.Quaternion();
+const _seat = new THREE.Vector3();
 const _v = new THREE.Vector3();
 const _local = new THREE.Vector3();
 const _a = new THREE.Vector3();
@@ -501,6 +528,8 @@ function measureWheel(wheel, axleSign){
   let radial = 0;
   let face = 0;
   let rimFace = 0;
+  let axialMin = Infinity;
+  let axialMax = -Infinity;
   wheel.traverse(c => {
     if (!c.isMesh || !c.geometry || /Brake/i.test(c.name || '')) return;
     const g = c.geometry;
@@ -521,10 +550,13 @@ function measureWheel(wheel, axleSign){
       radial = Math.max(radial, Math.hypot(p.y, p.z));
       const along = axleSign * p.x;
       face = Math.max(face, along);
+      axialMin = Math.min(axialMin, along);
+      axialMax = Math.max(axialMax, along);
       if (/Rim/i.test(c.name || '')) rimFace = Math.max(rimFace, along);
     }
   });
-  return { radial, face: (rimFace || face) + 0.012 };
+  if (!isFinite(axialMin)) { axialMin = -0.14; axialMax = 0.14; }
+  return { radial, face: (rimFace || face) + 0.012, axialMin, axialMax };
 }
 
 async function loadCar(){
@@ -568,6 +600,11 @@ async function loadCar(){
     const measured = measureWheel(wheel, saved.axleSign);
     saved.radius = measured.radial || 0.384;
     saved.nutFace = measured.face || 0.14;
+    saved.tireWidth = Math.min(0.34, Math.max(0.22, (measured.axialMax - measured.axialMin) || 0.28));
+    saved.tireCenter = ((measured.axialMax + measured.axialMin) * 0.5) || 0;
+    saved.axleWorld.copy(plusX).normalize();
+    // Positive tireCenter is outboard (toward the curb), not raw local +X.
+    saved.axleOut.copy(saved.axleWorld).multiplyScalar(saved.axleSign || 1);
     wheel.getWorldPosition(_v);
     // Sit the tread on y=0. The mesh AABB can hang below the rubber.
     orient.position.y -= (_v.y - saved.radius);
@@ -769,10 +806,12 @@ function placeHubNuts(ext){
     n.position.set(sign * ext, Math.cos(a)*0.125, Math.sin(a)*0.125);
   }
 }
-function placeSpareNuts(ext){
+function placeSpareNuts(extra){
+  const base = spare.userData.faceZ || 0.1;
+  const rad = spare.userData.nutR || 0.11;
   for (const n of spare.userData.nuts) {
     const a = n.userData.a;
-    n.position.set(Math.cos(a)*0.12, Math.sin(a)*0.12, ext);
+    n.position.set(Math.cos(a)*rad, Math.sin(a)*rad, base + extra);
   }
 }
 
@@ -863,20 +902,34 @@ function updateRig(dt, now){
       n.material.transparent = P.off > 0.7;
       if (P.off > 0.7) n.material.opacity = clamp01(1 - (P.off - 0.7) / 0.3);
     }
+    // A failed slide must not leave the original tire filling the hub.
+    // Once it has actually left the hub, keep it visible on the ground / at the trunk.
+    wheel.getWorldPosition(_v);
+    const stillOnHub = _v.distanceTo(hub) < Math.max(0.08, R * 0.35);
+    wheel.visible = !(P.flat > 0.5 && stillOnHub);
   }
 
-  hubStay.visible = P.flat > 0.45 && P.spare < 0.55;
+  hubStay.visible = P.flat > 0.45 && P.spare < 0.82;
 
+  // Seat on the live hub, shifted along the axle onto the original tire's center.
+  _seat.copy(hub).addScaledVector(saved.axleOut, saved.tireCenter || 0);
   if (P.spare > 0.001) {
     const ctrl = _b.set(hub.x + 0.28, Math.max(hub.y, R) + 0.05, hub.z + 0.68);
-    quad(laySpare, ctrl, hub, P.spare, spare.position);
+    if (P.spare > 0.985) {
+      spare.position.copy(_seat);
+    } else {
+      quad(laySpare, ctrl, _seat, P.spare, spare.position);
+      if (P.spare > 0.8) spare.position.lerp(_seat, smooth((P.spare - 0.8) / 0.185));
+    }
   } else {
     spare.position.lerpVectors(trunkSpare, laySpare, P.tools);
   }
-  spare.quaternion.identity();
-  const spareExt = (spare.userData.width * 0.5 + 0.012) + P.off * 0.1 + P.loose * 0.02;
-  placeSpareNuts(spareExt);
-  for (const n of spare.userData.nuts) n.visible = P.spare > 0.5;
+  if (saved.axleOut.lengthSq() > 0.5) _spareQuat.setFromUnitVectors(_axleZ, saved.axleOut);
+  else _spareQuat.identity();
+  spare.quaternion.copy(_spareQuat);
+  // Hand-tight while loose is still up (step 6); seated flush once torqued (step 8).
+  placeSpareNuts(P.off * 0.09 + P.loose * 0.045);
+  for (const n of spare.userData.nuts) n.visible = P.spare > 0.55;
 
   // Wrench: on the active nut during loosen / remove / final torque, otherwise with the tools.
   let nutSet = hubNuts;
