@@ -327,6 +327,7 @@ const saved = {
   tireCenter: 0,
   wheelRestPos: new THREE.Vector3(),
   wheelRestQuat: new THREE.Quaternion(),
+  wheelRestScale: new THREE.Vector3(1, 1, 1),
 };
 const anchors = {
   hub: new THREE.Vector3(),
@@ -385,6 +386,8 @@ for (let i=0;i<5;i++){
 hubStay.visible = false;
 
 function makeSpare(radius){
+  // Fallback only if WheelRearL is missing. The live spare is a clone of that
+  // node (installSharedSpare) so it matches the tire that comes off the car.
   // A solid rubber cylinder hides its own rim: from the curb the face is a
   // featureless black disc and the wheel well reads as empty. Build an open
   // tread, sidewall rings, and a rim proud of the outboard face instead.
@@ -432,6 +435,44 @@ function makeSpare(radius){
 }
 let spare = makeSpare(0.36);
 world.add(spare);
+
+// One WheelRearL for every curb-side rear wheel. The original stays in the
+// car hierarchy and is animated off as the flat. The spare is a clone of that
+// node under the same parent (shared geometry and materials) and keeps
+// WheelRearL's local rotation and scale, so the mounted wheel matches the
+// tire that came off. A world-space copy that only took the world quaternion
+// showed the back of the rim. Hub nuts are added after the clone. updateRig
+// hides the original only while it would still occupy the hub; once the flat
+// has left, it stays visible on the ground or in the trunk.
+function installSharedSpare(wheel){
+  const next = wheel.clone(true);
+  next.name = 'SpareWheelRearL';
+  next.userData.cloned = true;
+  next.userData.nuts = [];
+  next.traverse(obj => {
+    if (!obj.isMesh) return;
+    obj.castShadow = true;
+    obj.receiveShadow = true;
+  });
+  for (let i = 0; i < 5; i++){
+    const a = -Math.PI/2 + i*Math.PI*2/5;
+    const n = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.032, 0.03, 8), M.nut.clone());
+    n.rotation.z = Math.PI/2; // axle is wheel-local X, same as the hub nuts
+    n.userData.a = a;
+    n.castShadow = true;
+    n.visible = false;
+    next.add(n);
+    next.userData.nuts.push(n);
+  }
+  next.visible = false;
+  next.position.copy(wheel.position);
+  next.quaternion.copy(wheel.quaternion);
+  next.scale.copy(wheel.scale);
+  if (spare.parent) spare.parent.remove(spare);
+  spare.traverse(obj => { if (obj.geometry) obj.geometry.dispose(); });
+  spare = next;
+  wheel.parent.add(spare);
+}
 
 const hubNuts = [];
 function buildHubNuts(parent){
@@ -486,6 +527,7 @@ const qFlat = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI/2, 0.2
 const _axleZ = new THREE.Vector3(0, 0, 1);
 const _spareQuat = new THREE.Quaternion();
 const _seat = new THREE.Vector3();
+const spareWorld = new THREE.Vector3();
 const _v = new THREE.Vector3();
 const _local = new THREE.Vector3();
 const _a = new THREE.Vector3();
@@ -613,6 +655,8 @@ async function loadCar(){
     saved.hubLocal.copy(_v); orient.worldToLocal(saved.hubLocal);
     saved.wheelRestPos.copy(wheel.position);
     saved.wheelRestQuat.copy(wheel.quaternion);
+    saved.wheelRestScale.copy(wheel.scale);
+    installSharedSpare(wheel);
     buildHubNuts(wheel);
   }
   if (front) {
@@ -670,10 +714,13 @@ async function loadCar(){
     }
   }
 
-  // Rebuild spare to the measured rolling radius so it meets the ground when the car is lowered.
-  world.remove(spare);
-  spare = makeSpare(saved.radius);
-  world.add(spare);
+  // No WheelRearL: keep the procedural spare, sized to the measured radius.
+  if (!wheel) {
+    world.remove(spare);
+    spare.traverse(obj => { if (obj.geometry) obj.geometry.dispose(); });
+    spare = makeSpare(saved.radius);
+    world.add(spare);
+  }
 
   if (world.userData.blob) {
     const mid = new THREE.Vector3();
@@ -807,9 +854,20 @@ function placeHubNuts(ext){
   }
 }
 function placeSpareNuts(extra){
+  const nuts = spare.userData.nuts || [];
+  if (spare.userData.cloned) {
+    // Same bolt circle as the hub nuts: wheel-local X is the axle.
+    const sign = saved.axleSign;
+    const ext = saved.nutFace + extra;
+    for (const n of nuts) {
+      const a = n.userData.a;
+      n.position.set(sign * ext, Math.cos(a)*0.125, Math.sin(a)*0.125);
+    }
+    return;
+  }
   const base = spare.userData.faceZ || 0.1;
   const rad = spare.userData.nutR || 0.11;
-  for (const n of spare.userData.nuts) {
+  for (const n of nuts) {
     const a = n.userData.a;
     n.position.set(Math.cos(a)*rad, Math.sin(a)*rad, base + extra);
   }
@@ -865,10 +923,13 @@ function updateRig(dt, now){
   chock.rotation.y = 0;
 
   // Lay the spare and the flat behind the working wheel, not between the lens and the hub.
-  const trunkSpare = _c.set(trunk.x + 0.08, R, trunk.z + 0.72);
-  const laySpare = new THREE.Vector3(hub.x + 0.95, R, hub.z + 0.18);
+  // Both are full WheelRearL meshes. Keep about one diameter between centers,
+  // and park the stowed flat curb-side of the bumper so it does not sit inside
+  // the mounted spare.
+  const trunkSpare = _c.set(trunk.x + 0.25, R, hub.z + 0.2);
+  const laySpare = new THREE.Vector3(hub.x + 2.05, R, hub.z + 0.28);
   const layFlat = new THREE.Vector3(hub.x + 0.9, R, hub.z + 0.28);
-  const trunkFlat = new THREE.Vector3(trunk.x + 0.05, R, trunk.z + 0.95);
+  const trunkFlat = new THREE.Vector3(trunk.x + 0.2, R, hub.z + 0.78);
   const layJack = new THREE.Vector3(pinch.x + 0.28, 0, pinch.z + 0.7);
   const underJack = new THREE.Vector3(pinch.x, 0, pinch.z);
   const trunkJack = new THREE.Vector3(trunk.x - 0.28, 0.02, trunk.z + 0.72);
@@ -902,33 +963,50 @@ function updateRig(dt, now){
       n.material.transparent = P.off > 0.7;
       if (P.off > 0.7) n.material.opacity = clamp01(1 - (P.off - 0.7) / 0.3);
     }
-    // A failed slide must not leave the original tire filling the hub.
-    // Once it has actually left the hub, keep it visible on the ground / at the trunk.
+    // Original WheelRearL is the flat. Hide it only while that mesh is still on
+    // the hub (a failed slide, or the spare clone already seated there). Once
+    // it has left, it stays visible on the ground or in the trunk — the hub
+    // shows the spare clone alone.
     wheel.getWorldPosition(_v);
     const stillOnHub = _v.distanceTo(hub) < Math.max(0.08, R * 0.35);
-    wheel.visible = !(P.flat > 0.5 && stillOnHub);
+    const spareCoversHub = !!(spare.userData.cloned && P.spare > 0.82);
+    wheel.visible = !(stillOnHub && (P.flat > 0.5 || spareCoversHub));
   }
 
-  hubStay.visible = P.flat > 0.45 && P.spare < 0.82;
+  hubStay.visible = P.flat > 0.45 && P.spare < 0.8;
 
-  // Seat on the live hub, shifted along the axle onto the original tire's center.
+  // Procedural fallback is centered on its own origin, so it needs the axle
+  // shift. The WheelRearL clone shares the wheel's parent and local rotation,
+  // and its origin is the real hub.
   _seat.copy(hub).addScaledVector(saved.axleOut, saved.tireCenter || 0);
+  const seatTarget = spare.userData.cloned ? hub : _seat;
+  spare.visible = true;
   if (P.spare > 0.001) {
     const ctrl = _b.set(hub.x + 0.28, Math.max(hub.y, R) + 0.05, hub.z + 0.68);
-    if (P.spare > 0.985) {
-      spare.position.copy(_seat);
-    } else {
-      quad(laySpare, ctrl, _seat, P.spare, spare.position);
-      if (P.spare > 0.8) spare.position.lerp(_seat, smooth((P.spare - 0.8) / 0.185));
+    if (P.spare > 0.985) _bez.copy(seatTarget);
+    else {
+      quad(laySpare, ctrl, seatTarget, P.spare, _bez);
+      if (P.spare > 0.8) _bez.lerp(seatTarget, smooth((P.spare - 0.8) / 0.185));
     }
   } else {
-    spare.position.lerpVectors(trunkSpare, laySpare, P.tools);
+    _bez.lerpVectors(trunkSpare, laySpare, P.tools);
   }
-  if (saved.axleOut.lengthSq() > 0.5) _spareQuat.setFromUnitVectors(_axleZ, saved.axleOut);
-  else _spareQuat.identity();
-  spare.quaternion.copy(_spareQuat);
+  if (spare.userData.cloned) {
+    setWorldPos(spare, _bez);
+    spare.quaternion.copy(saved.wheelRestQuat);
+    spare.scale.copy(saved.wheelRestScale);
+  } else {
+    spare.position.copy(_bez);
+    if (saved.axleOut.lengthSq() > 0.5) _spareQuat.setFromUnitVectors(_axleZ, saved.axleOut);
+    else _spareQuat.identity();
+    spare.quaternion.copy(_spareQuat);
+  }
+  spare.getWorldPosition(spareWorld);
   // Hand-tight while loose is still up (step 6); seated flush once torqued (step 8).
-  placeSpareNuts(P.off * 0.09 + P.loose * 0.045);
+  const nutExtra = spare.userData.cloned
+    ? P.loose * 0.028 + P.off * 0.16
+    : P.off * 0.09 + P.loose * 0.045;
+  placeSpareNuts(nutExtra);
   for (const n of spare.userData.nuts) n.visible = P.spare > 0.55;
 
   // Wrench: on the active nut during loosen / remove / final torque, otherwise with the tools.
@@ -963,7 +1041,7 @@ function updateRig(dt, now){
   const ringScale = [0.26, 0.34, 0.18, 0.14, 0.16, 0.22, 0.3, 0.15, 0.18, 0.28][step];
   let ringAt = hub;
   if (step === 0) ringAt = chock.position;
-  else if (step === 1 || step === 6 || step === 9) ringAt = P.spare > 0.35 || step === 1 ? spare.position : hub;
+  else if (step === 1 || step === 6 || step === 9) ringAt = P.spare > 0.35 || step === 1 ? spareWorld : hub;
   else if (step === 3 || step === 7) { jackSaddle.getWorldPosition(_v); ringAt = step === 3 ? pinch : _v; }
   else if (step === 4) { jackSaddle.getWorldPosition(_v); ringAt = _v; }
   focusRing.position.copy(ringAt);
@@ -1124,7 +1202,9 @@ function project(v){
   const p = v.clone().project(camera);
   return [+p.x.toFixed(3), +p.y.toFixed(3)];
 }
-window.__frameInfo = () => ({
+window.__frameInfo = () => {
+  const sparePos = spare.getWorldPosition(new THREE.Vector3());
+  return {
   step,
   orbit: orbitOn,
   cam: camera.position.toArray().map(n => +n.toFixed(3)),
@@ -1137,7 +1217,7 @@ window.__frameInfo = () => ({
   pinchNdc: project(anchors.pinch),
   frontNdc: project(anchors.front),
   chockNdc: project(chock.position),
-  spareNdc: project(spare.position),
+  spareNdc: project(sparePos),
   anchorsLocal: {
     hub: saved.hubLocal.toArray(),
     front: saved.frontLocal.toArray(),
@@ -1146,7 +1226,8 @@ window.__frameInfo = () => ({
     axleSign: saved.axleSign,
     nutFace: saved.nutFace,
   },
-});
+  };
+};
 window.__setStep__ = (n, snap = true) => {
   go(n, { snapProps: !!snap, snapCam: !!snap });
   updateRig(1/60, performance.now());
